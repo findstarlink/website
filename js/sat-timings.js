@@ -12,17 +12,17 @@ if (typeof module !== "undefined") {
 function StarlinkSatTimings() {
     var parent = new SatTimings();
 
-    this.getVisibleTimes = function(sat, latitude, longitude, opts) {
+    this.getVisibleTimes = function (sat, latitude, longitude, opts) {
         var res = parent.getVisibleTimes(sat, latitude, longitude, opts);
 
         return res;
     };
 
-    this.getSatellitePath = function(sat, mins) { // -X mins to +X mins
+    this.getSatellitePath = function (sat, mins) { // -X mins to +X mins
         return parent.getSatellitePath(sat, mins);
     };
 
-    this.getCurrentSatelliteCoords = function(sat) {
+    this.getCurrentSatelliteCoords = function (sat) {
         return parent.getCurrentSatelliteCoords(sat);
     };
 }
@@ -43,7 +43,7 @@ function SatTimings() {
 
     /**
      * args:
-     *   sat: object containing {name: "starlink2", title: "Starlink-2", tle: ["line1", "line2"], stdMag: 1.4, launchDate: "2020-04-22"}
+     *   sat: object containing {name: "starlink2", title: "Starlink-2", omm: {...}, stdMag: 1.4, launchDate: "2020-04-22"}
      *   latitude: number (in degrees), North is positive, South is negative
      *   longitude: number (in degrees), East is positive, West is negative
      *   options: object {
@@ -55,7 +55,7 @@ function SatTimings() {
      * returns:
      *   {
      *     currentLocalTime: {time: "6:21 pm", date: "23 Jan 2020", epoch: 1579861567}, // epoch is always UTC (in sec)
-     *     tleDate: 1579861567, // unix time (always UTC)
+     *     elementEpoch: 1579861567, // unix time (always UTC)
      *     timezone: "Europe/Budapest",
      *     timezoneOffset: "+01:00",
      *     timezoneOffsetText: "CEST",
@@ -82,7 +82,7 @@ function SatTimings() {
      *     ]
      *   }
      */
-    this.getVisibleTimes = function(sat, latitude, longitude, opts) {
+    this.getVisibleTimes = function (sat, latitude, longitude, opts) {
         opts = setDefaultOptions(opts);
 
         var date = new Date();
@@ -102,9 +102,7 @@ function SatTimings() {
         var sunInfo = getSunInfo(date, observer);
 
         // run simulation
-        if (sat.satrec === undefined) {
-            sat.satrec = satellite.twoline2satrec(sat.tle[0], sat.tle[1]);
-        }
+        var satrec = ensureSatrec(sat);
 
         sat.launchEpochMs = -1;
         if (sat.launchDate !== undefined) {
@@ -122,7 +120,7 @@ function SatTimings() {
         // prepare response
         var response = {
             currentLocalTime: currentLocalTime,
-            tleDate: getTLEDate(sat.satrec.epochyr, sat.satrec.epochdays),
+            elementEpoch: getElementEpoch(sat),
             timezone: timezone,
             timezoneOffset: tzOffset,
             timezoneOffsetText: tzOffsetText,
@@ -137,7 +135,7 @@ function SatTimings() {
 
     /**
      * args:
-     *   sat: object containing {name: "starlink2", title: "Starlink-2", tle: ["line1", "line2"], stdMag: 1.4}
+    *   sat: object containing {name: "starlink2", title: "Starlink-2", omm: {...}, stdMag: 1.4}
      *   mins (optional): number (in minutes) to find path, from -min/2 to +min/2
      *
      * returns:
@@ -149,7 +147,7 @@ function SatTimings() {
      *     ]
      *   }
      */
-    this.getSatellitePath = function(sat, mins) { // -X mins to +X mins
+    this.getSatellitePath = function (sat, mins) { // -X mins to +X mins
         if (mins === undefined) {
             mins = DEFAULT_SAT_PATH_DURATION;
         }
@@ -160,11 +158,9 @@ function SatTimings() {
         listingPeriod = mins * RESOLUTION; // mins
         var nHalf = parseInt(listingPeriod / 2);
 
-        if (sat.satrec === undefined) {
-            sat.satrec = satellite.twoline2satrec(sat.tle[0], sat.tle[1]);
-        }
+        var satrec = ensureSatrec(sat);
 
-        var time = new Date().getTime(); // ms
+        var time = getPropagationBaseDate(sat, satrec).getTime(); // ms
         var startTime = -1;
 
         for (i = -nHalf; i < nHalf + 1; i++) {
@@ -174,7 +170,10 @@ function SatTimings() {
             }
 
             var date = new Date(epochTimeMs);
-            var positionAndVelocity = satellite.propagate(sat.satrec, date);
+            var positionAndVelocity = propagateSatrec(satrec, date);
+            if (positionAndVelocity === null) {
+                continue;
+            }
             var positionEci = positionAndVelocity.position;
 
             var gmst = satellite.gstime(date);
@@ -194,12 +193,14 @@ function SatTimings() {
         return result;
     }
 
-    this.getCurrentSatelliteCoords = function(sat) {
-        if (sat.satrec === undefined) {
-            sat.satrec = satellite.twoline2satrec(sat.tle[0], sat.tle[1]);
-        }
+    this.getCurrentSatelliteCoords = function (sat) {
+        var satrec = ensureSatrec(sat);
+        var propagationDate = getPropagationBaseDate(sat, satrec);
 
-        var positionAndVelocity = satellite.propagate(sat.satrec, new Date());
+        var positionAndVelocity = propagateSatrec(satrec, propagationDate);
+        if (positionAndVelocity === null) {
+            throw new Error('Unable to propagate satellite coordinates for current time');
+        }
         var positionEci = positionAndVelocity.position;
 
         var gmst = satellite.gstime(new Date());
@@ -250,7 +251,7 @@ function SatTimings() {
             height: 0
         };
 
-        sat.satrec = satellite.twoline2satrec(sat.tle[0], sat.tle[1]);
+        var satrec = ensureSatrec(sat);
 
         var times = [];
         var prevTimingValid = false;
@@ -265,7 +266,10 @@ function SatTimings() {
             }
 
             var date = new Date(epochTimeMs);
-            var positionAndVelocity = satellite.propagate(sat.satrec, date);
+            var positionAndVelocity = propagateSatrec(satrec, date);
+            if (positionAndVelocity === null) {
+                continue;
+            }
             var positionEci = positionAndVelocity.position;
 
             var gmst = satellite.gstime(date);
@@ -298,7 +302,7 @@ function SatTimings() {
 
             // console.log(date, azimuth, elevation, brightness, eclipsed);
 
-            times.push({time: date, azimuth: azimuth, elevation: elevation, brightness: brightness[0], eclipsed: eclipsed});
+            times.push({ time: date, azimuth: azimuth, elevation: elevation, brightness: brightness[0], eclipsed: eclipsed });
         }
 
         return times;
@@ -317,7 +321,7 @@ function SatTimings() {
             return rangedTimes;
         }
 
-        samples.forEach(function(t, idx) {
+        samples.forEach(function (t, idx) {
             var timeDiff = -1;
 
             if (lastTime === -1) {
@@ -326,7 +330,7 @@ function SatTimings() {
                 timeDiff = t.time.getTime() - lastTime.getTime();
             }
 
-            if (timeDiff > 5*60*1000 || idx === samples.length - 1) { // finished slot
+            if (timeDiff > 5 * 60 * 1000 || idx === samples.length - 1) { // finished slot
                 // if (idx == samples.length - 1) {
                 //     lastTime = t.time;
                 // }
@@ -337,21 +341,22 @@ function SatTimings() {
                     var endMoment = moment(lastTime);
                     var endMomentTz = endMoment.tz(observer.timezone);
 
-                    var mins = parseInt((lastTime.getTime() - eventStartTime.getTime()) / (60*1000));
+                    var mins = parseInt((lastTime.getTime() - eventStartTime.getTime()) / (60 * 1000));
 
                     // console.log(eventStartTime, mins, visibleSlices, 'found');
                     if (mins > 0 && visibleSlices > 0) {
-                        rangedTimes.push({start: startMomentTz, end: endMomentTz,
-                                          mins: mins,
-                                          startDir: parseFloat(startDir.toFixed(2)),
-                                          endDir: parseFloat(endDir.toFixed(2)),
-                                          minElev: parseFloat(minElev.toFixed(2)),
-                                          maxElev: parseFloat(maxElev.toFixed(2)),
-                                          startElev: parseFloat(startElev.toFixed(2)),
-                                          endElev: parseFloat(endElev.toFixed(2)),
-                                          azimuthAtMaxElev: parseFloat(azimuthAtMaxElev.toFixed(2)),
-                                          bestBrightness: parseFloat(bestBrightness.toFixed(2))
-                                    });
+                        rangedTimes.push({
+                            start: startMomentTz, end: endMomentTz,
+                            mins: mins,
+                            startDir: parseFloat(startDir.toFixed(2)),
+                            endDir: parseFloat(endDir.toFixed(2)),
+                            minElev: parseFloat(minElev.toFixed(2)),
+                            maxElev: parseFloat(maxElev.toFixed(2)),
+                            startElev: parseFloat(startElev.toFixed(2)),
+                            endElev: parseFloat(endElev.toFixed(2)),
+                            azimuthAtMaxElev: parseFloat(azimuthAtMaxElev.toFixed(2)),
+                            bestBrightness: parseFloat(bestBrightness.toFixed(2))
+                        });
                     }
                 }
 
@@ -408,7 +413,7 @@ function SatTimings() {
         var morningHourRange = [0, 12];
         var nowEpochMs = new Date().getTime();
 
-        var filteredRange = rangedTimings.filter(function(e) {
+        var filteredRange = rangedTimings.filter(function (e) {
             var startNormalized = normalizeMoment(e.start, observer.timezone);
 
             if (e.start.valueOf() < nowEpochMs) {
@@ -467,7 +472,7 @@ function SatTimings() {
     function getFormattedTimings(satName, satTitle, rangedTimings) {
         var timings = [];
 
-        rangedTimings.forEach(function(e) {
+        rangedTimings.forEach(function (e) {
             var brightnessText = (e.bestBrightness < 4 ? 'bright' : 'dim');
 
             if (e.timeType === 'poor' || e.timeType === 'average') {
@@ -500,7 +505,7 @@ function SatTimings() {
     /* fast scan */
     function getLoopInstruction(i, prevI, currTimingValid, prevTimingValid, fastForwardAllowedAfterI, samplesPerMin) {
         var loopInstruction = {
-            shouldContinue: false, i : i, prevTimingValid: prevTimingValid,
+            shouldContinue: false, i: i, prevTimingValid: prevTimingValid,
             fastForwardAllowedAfterI: fastForwardAllowedAfterI
         };
 
@@ -620,12 +625,12 @@ function SatTimings() {
         sunPos.elevation = sunPos.altitude;
 
         var cosDelta = Math.sin(lookAngles.elevation) * Math.sin(sunPos.elevation)
-                       + Math.cos(lookAngles.elevation) * Math.cos(sunPos.elevation) * Math.cos(lookAngles.azimuth - sunPos.azimuth);
+            + Math.cos(lookAngles.elevation) * Math.cos(sunPos.elevation) * Math.cos(lookAngles.azimuth - sunPos.azimuth);
         var angleC = Math.acos(cosDelta);
 
         var a = SUN_TO_EARTH_DIST - EARTH_RADIUS - SUN_RADIUS; // # Km
         var b = lookAngles.distance;
-        var c = Math.sqrt(Math.pow(a, 2) + Math.pow(b, 2) - 2*a*b*Math.cos(angleC));
+        var c = Math.sqrt(Math.pow(a, 2) + Math.pow(b, 2) - 2 * a * b * Math.cos(angleC));
 
         var phaseAngle = Math.acos((Math.pow(b, 2) + Math.pow(c, 2) - Math.pow(a, 2)) / (2 * b * c));
 
@@ -644,57 +649,57 @@ function SatTimings() {
     function getSunPosition(date) {
         var rad = Math.PI / 180;
         var jd = satellite.jday(date);
-        var t = (jd -2451545.0)/36525;
-        var mean_longitude = 280.46646 + 36000.76983*t + 0.0003032*t*t;
-        var mean_anomaly =  357.52911+ 35999.05029*t - 0.0001537*t*t;
-        var eccentricity = 0.016708634 - 0.000042037*t - 0.0000001267*t*t;
-        var equation = (1.914602 - 0.004817*t - 0.000014*t*t)*Math.sin(mean_anomaly*rad);
-        equation += (0.019993 - 0.000101*t)*Math.sin(2*mean_anomaly*rad);
-        equation += 0.000289 *Math.sin(3*mean_anomaly*rad);
+        var t = (jd - 2451545.0) / 36525;
+        var mean_longitude = 280.46646 + 36000.76983 * t + 0.0003032 * t * t;
+        var mean_anomaly = 357.52911 + 35999.05029 * t - 0.0001537 * t * t;
+        var eccentricity = 0.016708634 - 0.000042037 * t - 0.0000001267 * t * t;
+        var equation = (1.914602 - 0.004817 * t - 0.000014 * t * t) * Math.sin(mean_anomaly * rad);
+        equation += (0.019993 - 0.000101 * t) * Math.sin(2 * mean_anomaly * rad);
+        equation += 0.000289 * Math.sin(3 * mean_anomaly * rad);
         var true_longitude = mean_longitude + equation;
         var true_anomary = mean_anomaly + equation;
-        var radius = (1.000001018*(1-eccentricity*eccentricity))/(1 + eccentricity*Math.cos(true_anomary*rad));
+        var radius = (1.000001018 * (1 - eccentricity * eccentricity)) / (1 + eccentricity * Math.cos(true_anomary * rad));
         var nao = new NutationAndObliquity(date)
         var nutation = nao.nutation();
         var obliquity = nao.obliquity();
         var apparent_longitude = true_longitude + nutation;
         var longitude = apparent_longitude;
-        var distance=radius*149597870.691;
+        var distance = radius * 149597870.691;
 
-        var x = distance*Math.cos(longitude*rad);
-        var y = distance*(Math.sin(longitude*rad)*Math.cos(obliquity*rad));
-        var z = distance*(Math.sin(longitude*rad)*Math.sin(obliquity*rad));
+        var x = distance * Math.cos(longitude * rad);
+        var y = distance * (Math.sin(longitude * rad) * Math.cos(obliquity * rad));
+        var z = distance * (Math.sin(longitude * rad) * Math.sin(obliquity * rad));
 
-        return {x: x, y: y, z: z};
+        return { x: x, y: y, z: z };
     }
 
     function NutationAndObliquity(date) {
         var rad = Math.PI / 180;
         var jd = satellite.jday(date)
-        var t = (jd -2451545.0)/36525;
-        var omega = (125.04452 - 1934.136261*t+0.0020708*t*t + (t*t+t)/450000)*rad;
-        var L0 = (280.4665 + 36000.7698*t)*rad
-        var L1 = (218.3165 + 481267.8813*t)*rad
+        var t = (jd - 2451545.0) / 36525;
+        var omega = (125.04452 - 1934.136261 * t + 0.0020708 * t * t + (t * t + t) / 450000) * rad;
+        var L0 = (280.4665 + 36000.7698 * t) * rad
+        var L1 = (218.3165 + 481267.8813 * t) * rad
         return {
-            nutation:function(){
-                var nutation = (-17.20/3600)*Math.sin(omega)-(-1.32/3600)*Math.sin(2*L0)-(0.23/3600)*Math.sin(2*L1)+(0.21/3600)*Math.sin(2*omega)/rad;
+            nutation: function () {
+                var nutation = (-17.20 / 3600) * Math.sin(omega) - (-1.32 / 3600) * Math.sin(2 * L0) - (0.23 / 3600) * Math.sin(2 * L1) + (0.21 / 3600) * Math.sin(2 * omega) / rad;
                 return nutation;
             },
-            obliquity:function(){
-                var obliquity_zero = 23+26.0/60+21.448/3600 -(46.8150/3600)*t -(0.00059/3600)*t*t +(0.001813/3600)*t*t*t;
-                var obliquity_delta = (9.20/3600)*Math.cos(omega) + (0.57/3600)*Math.cos(2*L0) +(0.10/3600)*Math.cos(2*L1)-(0.09/3600)*Math.cos(2*omega);
-                var obliquity= obliquity_zero + obliquity_delta;
+            obliquity: function () {
+                var obliquity_zero = 23 + 26.0 / 60 + 21.448 / 3600 - (46.8150 / 3600) * t - (0.00059 / 3600) * t * t + (0.001813 / 3600) * t * t * t;
+                var obliquity_delta = (9.20 / 3600) * Math.cos(omega) + (0.57 / 3600) * Math.cos(2 * L0) + (0.10 / 3600) * Math.cos(2 * L1) - (0.09 / 3600) * Math.cos(2 * omega);
+                var obliquity = obliquity_zero + obliquity_delta;
                 return obliquity;
             }
         }
     }
 
     function vec_mag(v) {
-        return Math.sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
+        return Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
     }
 
     function vec_diff(v0, v1) {
-        return {x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z};
+        return { x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z };
     }
 
     /* general utils */
@@ -707,17 +712,51 @@ function SatTimings() {
         return newM;
     }
 
-    function getTLEDate(epochYear, epochDays) {
-        var d = new Date(2000 + epochYear, 0);
-        var days = parseInt(epochDays);
-        d.setDate(days);
+    function ensureSatrec(sat) {
+        if (sat.satrec === undefined) {
+            sat.satrec = satellite.json2satrec(sat.omm);
+        }
 
-        return d.getTime() / 1000; // sec
+        return sat.satrec;
+    }
+
+    function propagateSatrec(satrec, date) {
+        var positionAndVelocity = satellite.propagate(satrec, date);
+
+        if (positionAndVelocity === null || positionAndVelocity.position === undefined) {
+            return null;
+        }
+
+        return positionAndVelocity;
+    }
+
+    function getPropagationBaseDate(sat, satrec) {
+        var currentDate = new Date();
+
+        if (propagateSatrec(satrec, currentDate) !== null) {
+            return currentDate;
+        }
+
+        return getElementDate(sat);
+    }
+
+    function getElementDate(sat) {
+        var epochMs = Date.parse(sat.omm.EPOCH);
+
+        if (Number.isNaN(epochMs)) {
+            throw new Error('Invalid OMM epoch');
+        }
+
+        return new Date(epochMs);
+    }
+
+    function getElementEpoch(sat) {
+        return Math.floor(getElementDate(sat).getTime() / 1000);
     }
 
     function getTimestamp(m, prefix) {
         prefix = (prefix === undefined ? '' : prefix);
-        return {time: prefix + m.format('h:mm a'), date: m.format('D MMM YYYY'), epoch: m.unix()};
+        return { time: prefix + m.format('h:mm a'), date: m.format('D MMM YYYY'), epoch: m.unix() };
     }
 
     function getDir(az) {
