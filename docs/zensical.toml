@@ -1,0 +1,42 @@
+[project]
+site_url = "https://findstarlink.com/docs/"
+site_name = "FindStarlink Docs"
+
+nav = [
+  { "Welcome" = "index.md" },
+  { "Finding your location" = "finding-your-location.md" },
+  { "Reading the results" = "reading-the-results.md" },
+  { "Set reminders" = "set-reminders.md" },
+  { "Live map" = "live-map.md" },
+  { "FAQ" = "faq.md" },
+  { "Support the project" = "support-the-project.md" },
+  { "Contact" = "contact.md" },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "content.tabs.link",
+  "navigation.footer",
+  "navigation.instant",
+  "navigation.path",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+]
+
+# Dark theme only - the app is text-only on dark, so the docs match it.
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Dark mode"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+def_list = {}
+md_in_html = {}
+toc.permalink = false
+pymdownx.details = {}
+pymdownx.tabbed.alternate_style = true
+pymdownx.tabbed.combine_header_slug = true

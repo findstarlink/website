@@ -14,10 +14,23 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: 3.x
+    - name: Install Zensical
+      run: |-
+        pip install zensical
     - name: Copy files into the build
       run: |-
         mkdir build
-        rsync -av --exclude '.git' --exclude '.github' --exclude 'README.md' --exclude 'LICENSE' --exclude 'build' ./ build/
+        # exclude the docs folder, we don't want to upload the raw markdown source. The generated docs site is built separately and copied into build/docs
+        rsync -av --exclude '.git' --exclude '.github' --exclude 'README.md' --exclude 'LICENSE' --exclude 'build' --exclude 'docs' ./ build/
+    - name: Build docs site
+      run: |-
+        cd docs
+        zensical build
+        mv site ../build/docs
     - name: Compress each file using brotli
       run: |-
         # compress each file and rename to the original file name (without the .br extension, i.e. preserve original file names)
