@@ -2,6 +2,10 @@
 site_url = "https://findstarlink.com/docs/"
 site_name = "FindStarlink Docs"
 
+[project.extra]
+# The docs logo in the header links back to the main site.
+homepage = "https://findstarlink.com"
+
 nav = [
   { "Welcome" = "index.md" },
   { "Finding your location" = "finding-your-location.md" },

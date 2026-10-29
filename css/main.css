@@ -135,6 +135,7 @@ a {
 	border: 0px;
 	color: white;
 	text-transform: uppercase;
+	text-decoration: none;
 }
 .btn-small {
 	padding: 5pt 9pt 5pt 9pt;
